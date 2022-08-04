@@ -1,0 +1,159 @@
+y = data
+t_max = length(y)
+
+###########################################################################################
+#【尤度計算とパラメータ推定】
+
+#関数定義
+# 1時点分のカルマンフィルタを行う関数
+KF_function = function(m_t_minus_1, C_t_minus_1, t){
+  # 状態の予測分布
+  a_t = F_t %*% m_t_minus_1
+  R_t = F_t %*% C_t_minus_1 %*% t(F_t) + V_t
+  # 観測値の予測分布
+  h_t = H_t %*% a_t
+  Q_t = H_t %*% R_t %*% t(H_t) + W_t
+  # カルマンゲイン
+  K_t = R_t %*% t(H_t) %*% solve(Q_t)
+  # フィルタリング分布（状態の更新）
+  m_t = a_t + K_t %*% (y[t] - h_t)
+  C_t = (diag(nrow(R_t)) - K_t %*% H_t) %*% R_t
+  
+  return(list(m = m_t, C = C_t,
+              a = a_t, R = R_t,
+              h = h_t, Q = Q_t))
+}
+#KF適用時は1としていた、sigma_obsの推定値を求める関数
+sigma_obs_function = function(y,N,ypre,d){
+  sum = 0
+  for (i in 1:N){
+    sum = sum + ((y[i]-ypre[i])^2)/d[i]
+  } 
+  return (sum/N)
+}
+
+
+#初期化
+alpha2_vec = c()
+loglike_vec = c()
+sigma_obs_vec = c()
+
+#alpha^2与える
+for (b in seq(-1.5,-0.7,0.01)){
+  alpha2 = 10^b
+  
+  #カルマンフィルタを適用
+  #状態ベクトルの次元
+  p = 1
+  
+  # パラメータを設定
+  F_t = matrix(1,nrow=p,ncol=p)       #状態遷移行列
+  V_t = diag(p)*alpha2                #システムノイズの分散alpha^2
+  H_t = matrix(1,nrow=1,ncol=p)       #観測行列
+  W_t = matrix(1, ncol = 1, nrow = 1) #観測ノイズの分散1
+  m0  = matrix(0, nrow=p,ncol=1)      #初期分布の平均
+  C0  = diag(p)*1                     #初期分布の共分散行列
+  
+  m = matrix(NA_real_,nrow=p,ncol=t_max) #フィルタリング分布の平均
+  C =  array(NA_real_,dim=c(p,p,t_max))  #フィルタリング分布の共分散行列
+  a = matrix(NA_real_,nrow=p,ncol=t_max) #状態の予測分布の平均
+  R =  array(NA_real_,dim=c(p,p,t_max))  #状態の予測分布の共分散行列
+  h = matrix(NA_real_,nrow=p,ncol=t_max) #観測値の予測分布の平均
+  Q =  array(NA_real_,dim=c(p,p,t_max))  #観測値の予測分布の共分散行列
+  
+  # 時点：t = 1
+  KF = KF_function(m0, C0, t = 1)
+  m[,1] = KF$m; C[,,1] = KF$C
+  a[,1] = KF$a; R[,,1] = KF$R
+  h[,1] = KF$h; Q[,,1] = KF$Q
+  # 時点：t = 2〜t_max
+  for (t in 2:t_max){
+    KF = KF_function(m[,t-1], C[,,t-1], t = t)
+    m[,t] = KF$m; C[,,t] = KF$C
+    a[,t] = KF$a; R[,,t] = KF$R
+    h[,t] = KF$h; Q[,,t] = KF$Q
+  }
+  
+  #sigma_obsの推定値を求める
+  sigma_obs = sigma_obs_function(y=y,N=t_max,ypre=c(h),d=Q)
+  
+  #対数尤度を求める
+  loglike = -(t_max*log(2*pi*sigma_obs) + sum(log(Q)) + t_max)/2
+  
+  alpha2_vec = c(alpha2_vec,alpha2)
+  loglike_vec = c(loglike_vec,loglike)
+  sigma_obs_vec = c(sigma_obs_vec,sigma_obs)
+  
+}
+
+#対数尤度を最大化するalpha^2とsigma_obsを求める
+plot(alpha2_vec,loglike_vec)
+plot(alpha2_vec,loglike_vec,type='l')
+alpha2_opt = alpha2_vec[which.max(loglike_vec)]
+sigma_obs_opt = sigma_obs_vec[which.max(loglike_vec)]
+alpha2_opt
+sigma_obs_opt
+
+#求めたalpha^2とsigma_obsの最尤推定値で再度カルマンフィルタを適用
+sigma_sys = alpha2_opt * sigma_obs_opt
+#状態ベクトルの次元
+p = 1
+
+# パラメータを設定
+F_t = matrix(1,nrow=p,ncol=p)      
+V_t = diag(p)*sigma_sys             
+H_t = matrix(1,nrow=1,ncol=p)         
+W_t = matrix(sigma_obs_opt,ncol=1,nrow=1)
+m0  = matrix(1, nrow=p,ncol=1)      
+C0  = diag(p)*1000000                
+
+m = matrix(NA_real_,nrow=p,ncol=t_max) 
+C =  array(NA_real_,dim=c(p,p,t_max)) 
+a = matrix(NA_real_,nrow=p,ncol=t_max)
+R =  array(NA_real_,dim=c(p,p,t_max))  
+h = matrix(NA_real_,nrow=p,ncol=t_max) 
+Q =  array(NA_real_,dim=c(p,p,t_max)) 
+
+# 時点：t = 1
+KF = KF_function(m0, C0, t = 1)
+m[,1] = KF$m; C[,,1] = KF$C
+a[,1] = KF$a; R[,,1] = KF$R
+h[,1] = KF$h; Q[,,1] = KF$Q
+# 時点：t = 2〜t_max
+for (t in 2:t_max){
+  KF = KF_function(m[,t-1], C[,,t-1], t = t)
+  m[,t] = KF$m; C[,,t] = KF$C
+  a[,t] = KF$a; R[,,t] = KF$R
+  h[,t] = KF$h; Q[,,t] = KF$Q
+}
+
+#########平滑化##########
+smoothing = function(s_t_plus_1,S_t_plus_1,t){
+  #平滑化利得
+  A_t = C[,,t] %*% t(F_t) %*% solve(R[,,t+1])
+  #更新
+  s_t  = m[,t]  + A_t %*% (s_t_plus_1 - a[,t+1])
+  S_t = C[,,t] + A_t %*% (S_t_plus_1 - R[,,t+1]) %*% t(A_t)
+  
+  return(list(s=s_t,S=S_t))
+  }
+
+s = matrix(NA_real_,nrow=p,ncol=t_max)
+S = array(NA_real_,dim=c(p,p,t_max))
+s[,t_max] = m[,t_max]
+S[,,t_max] = C[,,t_max]
+
+for (t in (t_max-1):1){
+  SM = smoothing(s[,t+1],S[,,t+1],t)
+  s[,t] = SM$s
+  S[,,t] = SM$S
+  }
+
+
+plot(y,type='l',col='black')
+lines(m[,],type='l',col='red')
+lines(s[,],type='l',col='green')
+legend(x='topright',
+       legend=c('原系列','自作フィルタリング','自作平滑化'),
+       col=c('black','red','green'),lwd=1)
+
